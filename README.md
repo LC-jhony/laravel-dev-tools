@@ -21,7 +21,7 @@ Script de instalación automatizado para configurar un entorno de desarrollo Lar
 ## 🔧 Uso
 
 ```bash
-cd install-laravel
+git clone https://github.com/LC-jhony/laravel-dev-tools.git
 chmod +x install.sh
 ./install.sh
 ```
