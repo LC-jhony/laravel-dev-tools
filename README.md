@@ -55,7 +55,6 @@ El instalador te guiará a través de 6 pasos:
 ```
 install-laravel/
 ├── install.sh          # Script principal de instalación
-├── AGENTS.md           # Instrucciones para agentes IA
 └── README.md           # Este archivo
 ```
 
