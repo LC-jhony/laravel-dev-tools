@@ -1,8 +1,9 @@
+
 #!/usr/bin/env bash
 # ================================================================
-#  Ubuntu Dev Stack Installer  v2.2
+#  Ubuntu Dev Stack Installer  v2.3
 #  PHP 8.4  MariaDB  Node.js  Composer  Valet  Laravel
-#  Ubuntu 24.04 LTS
+#  Ubuntu 24.04 LTS  |  WSL compatible
 # ================================================================
 set -euo pipefail
 
@@ -22,16 +23,36 @@ CYN=$'\033[38;5;80m'
 WHT=$'\033[38;5;255m'
 GRY=$'\033[38;5;244m'
 DGY=$'\033[38;5;238m'
+# Extra palette for modern UI
+C1=$'\033[38;5;51m'    # bright cyan
+C2=$'\033[38;5;45m'    # sky
+C3=$'\033[38;5;39m'    # azure
+C4=$'\033[38;5;33m'    # blue
+C5=$'\033[38;5;27m'    # deep blue
+EMERALD=$'\033[38;5;48m'
+MINT=$'\033[38;5;85m'
+CORAL=$'\033[38;5;210m'
+GOLD=$'\033[38;5;220m'
+VIOLET=$'\033[38;5;135m'
+BG_STRIP=$'\033[48;5;234m'   # subtle dark bg for bar rows
+ITALIC=$'\033[3m'
+BOLD=$'\033[1m'
 
 # ── State ─────────────────────────────────────────────────────────
 LOG_FILE="/tmp/ubuntu-dev-installer-$(date +%s).log"
 NODE_VERSION="24"
 declare -A INSTALL=([php]=1 [mariadb]=1 [nodejs]=1 [composer]=1 [valet]=1 [laravel]=1)
 declare -A RESULT=()
-declare -A ALREADY=()    # versions already installed
+declare -A ALREADY=()
 INSTALL_ERRORS=()
 START_TIME=$SECONDS
-CACHED_SUDO_PASS=""      # Password cacheado para reutilizar
+CACHED_SUDO_PASS=""
+
+# ── Detect WSL ────────────────────────────────────────────────────
+IS_WSL=0
+if grep -qi microsoft /proc/version 2>/dev/null || grep -qi wsl /proc/version 2>/dev/null; then
+  IS_WSL=1
+fi
 
 # ── Terminal ──────────────────────────────────────────────────────
 TW()       { tput cols  2>/dev/null || echo 80; }
@@ -43,7 +64,6 @@ trap 'cur_show; tput sgr0 2>/dev/null || true; echo' EXIT INT TERM
 PAD=3
 _P() { printf '%*s' "$PAD" ''; }
 
-# ── rep: repeat char N times (loop-safe for multibyte) ───────────
 rep() {
   local char="$1" n="$2" i s=""
   for (( i=0; i<n; i++ )); do s+="$char"; done
@@ -72,7 +92,6 @@ rule() {
   printf '%s%s%s\n' "$color" "$(rep "$char" "$w")" "$R"
 }
 
-# ── Box chars (UTF-8 if locale supports it, ASCII fallback) ───────
 _BT='+' _BB='+' _BL='|' _BR='|' _BH='-' _BSL='+' _BSR='+'
 if [[ "${LANG:-}" =~ UTF ]]; then
   _BT='╭' _BB='╰' _BL='│' _BR='│' _BH='─' _BSL='├' _BSR='┤'
@@ -107,14 +126,14 @@ box_row() {
 }
 
 # ── Status icons ──────────────────────────────────────────────────
-ic_ok()    { printf '%s%s+%s' "$GRN" "$B" "$R"; }
-ic_skip()  { printf '%s%s~%s' "$YLW" "$B" "$R"; }
-ic_err()   { printf '%s%sX%s' "$RED" "$B" "$R"; }
-ic_info()  { printf '%s%si%s' "$CYN" "$B" "$R"; }
-ic_warn()  { printf '%s%s!%s' "$YLW" "$B" "$R"; }
-ic_arr()   { printf '%s>%s'   "$CYN"      "$R"; }
-ic_dot()   { printf '%s.%s'   "$DGY"      "$R"; }
-ic_exists(){ printf '%s%s*%s' "$GRN" "$B" "$R"; }
+ic_ok()    { printf '%s%s✔%s' "$EMERALD" "$BOLD" "$R"; }
+ic_skip()  { printf '%s%s◌%s' "$YLW"    "$BOLD" "$R"; }
+ic_err()   { printf '%s%s✘%s' "$CORAL"  "$BOLD" "$R"; }
+ic_info()  { printf '%s%s◈%s' "$C1"     "$BOLD" "$R"; }
+ic_warn()  { printf '%s%s◆%s' "$GOLD"   "$BOLD" "$R"; }
+ic_arr()   { printf '%s›%s'   "$C2"            "$R"; }
+ic_dot()   { printf '%s·%s'   "$DGY"           "$R"; }
+ic_exists(){ printf '%s%s⬡%s' "$MINT"   "$BOLD" "$R"; }
 
 # ── Logging ───────────────────────────────────────────────────────
 log_ok()    { printf '%s %s  %s%s%s%s\n'   "$(_P)" "$(ic_ok)"    "$GRN$B" "$*" "$R" ""; printf '[OK]    %s\n' "$*" >> "$LOG_FILE"; }
@@ -127,31 +146,55 @@ log_dim()   { printf '%s %s  %s%s%s\n'     "$(_P)" "$(ic_dot)"   "$GRY"   "$*" "
 log_exists(){ printf '%s %s  %s%s%s%s\n'   "$(_P)" "$(ic_exists)" "$GRN"  "Already installed: " "$*" "$R"; printf '[EXISTS] %s\n' "$*" >> "$LOG_FILE"; }
 
 # ================================================================
-#  SUDO PASSWORD PROMPT — colored green with * masking
+#  SERVICE HELPER — works on both systemd and WSL/SysV
 # ================================================================
-# Reads a password character by character, printing * for each.
-# Returns the password in the variable named by $1.
+svc_start() {
+  local svc="$1"
+  if [[ $IS_WSL -eq 1 ]] || ! systemctl is-system-running --quiet 2>/dev/null; then
+    sudo service "$svc" start >> "$LOG_FILE" 2>&1 || true
+  else
+    sudo systemctl start "$svc" >> "$LOG_FILE" 2>&1 || true
+  fi
+}
+
+svc_enable() {
+  local svc="$1"
+  if [[ $IS_WSL -eq 1 ]] || ! systemctl is-system-running --quiet 2>/dev/null; then
+    # WSL doesn't support enable in the traditional sense; just start
+    sudo service "$svc" start >> "$LOG_FILE" 2>&1 || true
+  else
+    sudo systemctl enable --now "$svc" >> "$LOG_FILE" 2>&1 || true
+  fi
+}
+
+svc_status() {
+  local svc="$1"
+  if [[ $IS_WSL -eq 1 ]] || ! systemctl is-system-running --quiet 2>/dev/null; then
+    sudo service "$svc" status >> "$LOG_FILE" 2>&1
+  else
+    systemctl is-active --quiet "$svc"
+  fi
+}
+
+# ================================================================
+#  SUDO PASSWORD PROMPT
+# ================================================================
 read_password_masked() {
   local __varname="$1"
   local __prompt="${2:-Password: }"
   local __pass=""
   local __char
 
-  # Print colored prompt
   printf '%s%s%s%s' "$GRN" "$B" "$__prompt" "$R"
 
-  # Read char by char
   while IFS= read -r -s -n1 __char; do
-    # Enter key (empty string or carriage return)
     if [[ -z "$__char" || "$__char" == $'\r' ]]; then
-      echo   # newline after password
+      echo
       break
     fi
-    # Backspace
     if [[ "$__char" == $'\177' || "$__char" == $'\010' ]]; then
       if [[ -n "$__pass" ]]; then
         __pass="${__pass%?}"
-        # Erase last * on screen
         printf '\b \b'
       fi
     else
@@ -163,18 +206,11 @@ read_password_masked() {
   printf -v "$__varname" '%s' "$__pass"
 }
 
-# ================================================================
-#  CUSTOM SUDO: intercepts the password prompt, shows it in green
-#  with * masking, then feeds it to sudo via stdin (-S flag).
-# ================================================================
 sudo_ask() {
-  # Usage: sudo_ask "description" cmd [args...]
   local desc="$1"; shift
   spinner_stop
 
-  # Check if sudo already has cached credentials
   if sudo -n true 2>/dev/null; then
-    # No password needed right now
     log_run "$desc"
     local rc=0
     sudo "$@" >> "$LOG_FILE" 2>&1 || rc=$?
@@ -183,18 +219,15 @@ sudo_ask() {
     return $rc
   fi
 
-  # Need a password - use cached or prompt
   local __pw=""
   local user; user=$(whoami)
-  
+
   if [[ -n "$CACHED_SUDO_PASS" ]]; then
-    # Use cached password
     log_run "$desc"
     local rc=0
     printf '%s\n' "$CACHED_SUDO_PASS" | sudo -S "$@" >> "$LOG_FILE" 2>&1 || rc=$?
     if [[ $rc -eq 0 ]]; then log_ok "$desc"
     else
-      # Cached password failed, prompt for new one
       printf '\n'
       read_password_masked __pw "${GRN}${B}[sudo]${R}${GRN} password for ${B}${user}${R}${GRN}:${R} "
       printf '\n'
@@ -208,7 +241,6 @@ sudo_ask() {
     return $rc
   fi
 
-  # No cached password - prompt user
   printf '\n'
   read_password_masked __pw "${GRN}${B}[sudo]${R}${GRN} password for ${B}${user}${R}${GRN}:${R} "
   printf '\n'
@@ -216,7 +248,7 @@ sudo_ask() {
   log_run "$desc"
   local rc=0
   printf '%s\n' "$__pw" | sudo -S "$@" >> "$LOG_FILE" 2>&1 || rc=$?
-  
+
   if [[ $rc -eq 0 ]]; then
     CACHED_SUDO_PASS="$__pw"
     log_ok "$desc"
@@ -226,7 +258,6 @@ sudo_ask() {
   return $rc
 }
 
-# Warm-up sudo cache once at startup with our styled prompt
 sudo_warmup() {
   if [[ $EUID -eq 0 ]]; then return 0; fi
   if sudo -n true 2>/dev/null; then
@@ -259,7 +290,7 @@ sudo_warmup() {
   fi
 }
 
-# ── run_cmd (non-sudo, with spinner) ─────────────────────────────
+# ── Spinner ───────────────────────────────────────────────────────
 SPIN_PID=""
 SPIN_FRAMES=('-' '\' '|' '/')
 
@@ -300,79 +331,156 @@ run_cmd() {
   return $rc
 }
 
-# sudo_cmd: runs command with sudo (credentials cached at start)
 sudo_cmd() {
   local desc="$1"; shift
   spinner_stop
-  
   log_run "$desc"
   local rc=0
-  
-  # Check if sudo is already cached (no password needed)
+
   if sudo -n true 2>/dev/null; then
-    # Already cached - use it directly
     sudo "$@" >> "$LOG_FILE" 2>&1 || rc=$?
   else
-    # Not cached - use cached password from initial auth
     if [[ -n "$CACHED_SUDO_PASS" ]]; then
       printf '%s\n' "$CACHED_SUDO_PASS" | sudo -S "$@" >> "$LOG_FILE" 2>&1 || rc=$?
     else
-      # Fallback: try direct sudo (will prompt)
       sudo "$@" >> "$LOG_FILE" 2>&1 || rc=$?
     fi
   fi
-  
+
   if [[ $rc -eq 0 ]]; then log_ok "$desc"
   else log_err "$desc  (exit $rc)"; log_dim "see: $LOG_FILE"; INSTALL_ERRORS+=("$desc"); fi
   return $rc
 }
 
-# ── Pacman Progress Bar (animated) ─────────────────────────────────
-PACMAN_FRAMES=('◐' '◑' '◒' '◓' '◔' '◕')
-PACMAN_DIRTY='●'
-PACMAN_CLEAN='○'
+# ================================================================
+#  MODERN PROGRESS UI
+#  global_progress  — full-width multi-segment pipeline bar
+#  task_progress    — slim per-package fill bar with glow head
+#  draw_pkg_panel   — live status panel of all packages
+# ================================================================
 
+# Gradient palette for the 7 pipeline segments
+declare -a SEG_COLORS=("$C1" "$C2" "$C3" "$C4" "$EMERALD" "$MINT" "$GOLD")
+declare -a SEG_ICONS=("⬡" "⬡" "⬡" "⬡" "⬡" "⬡" "⬡")  # filled once done
+declare -a STEP_NAMES=("system" "php" "mariadb" "composer" "nodejs" "valet" "laravel")
+declare -a STEP_DONE=()   # filled with 1 as each step completes
+
+# thin block chars for smooth fill
+FILL_FULL='█'
+FILL_HEAD='▓'
+FILL_MID='▒'
+FILL_EMPTY='░'
+
+# ── global_progress: pipeline dots + thin gradient bar ──────────
 global_progress() {
   local cur="$1" tot="$2" lbl="${3:-}"
   local w; w=$(TW)
-  local bar_w=$(( w - PAD*2 - 20 ))
-  [[ $bar_w -lt 10 ]] && bar_w=10
+  local pct=$(( cur * 100 / tot ))
+
+  # ── Row 1: pipeline segment dots ─────────────────────────────
+  printf '%s  ' "$(_P)"
+  local i
+  for (( i=0; i<tot; i++ )); do
+    local sname="${STEP_NAMES[$i]:-step}"
+    local sc="${SEG_COLORS[$i]:-$CYN}"
+    local slen=${#sname}
+    if (( i < cur )); then
+      # completed segment
+      printf '%s%s●%s' "$sc$BOLD" "" "$R"
+      printf '%s%s%s' "$sc" "$sname" "$R"
+    elif (( i == cur - 1 )) && (( cur < tot )); then
+      # active (last completed = current running)
+      printf '%s%s◆%s' "$GOLD$BOLD" "" "$R"
+      printf '%s%s%s' "$GOLD$BOLD" "$sname" "$R"
+    else
+      # pending
+      printf '%s○%s' "$DGY" "$R"
+      printf '%s%s%s' "$DGY" "$sname" "$R"
+    fi
+    (( i < tot-1 )) && printf '%s ─ %s' "$DGY" "$R"
+  done
+  echo
+
+  # ── Row 2: gradient fill bar ─────────────────────────────────
+  local bar_w=$(( w - PAD*2 - 12 ))
+  [[ $bar_w -lt 20 ]] && bar_w=20
   local filled=$(( cur * bar_w / tot ))
   local empty=$(( bar_w - filled ))
-  local pct=$(( cur * 100 / tot ))
-  
-  local pacman_frame="${PACMAN_FRAMES[$((SECONDS % 6))]}"
-  local bar_filled=""
-  for ((i=0; i<filled; i++)); do
-    if [[ $i -eq $((filled-1)) && $cur -lt $tot ]]; then
-      bar_filled+="$GRN$pacman_frame$R"
-    else
-      bar_filled+="$GRN$PACMAN_DIRTY$R"
+
+  printf '%s  ' "$(_P)"
+  printf '%s╠%s' "$DGY" "$R"
+
+  # Fill with gradient blocks — color shifts across segments
+  local seg_w=$(( filled / (tot > 0 ? tot : 1) ))
+  local remaining=$filled
+  local col_i=0
+  for (( i=0; i<tot && remaining>0; i++ )); do
+    local chunk=$(( i < tot-1 ? seg_w : remaining ))
+    [[ $chunk -gt $remaining ]] && chunk=$remaining
+    [[ $chunk -lt 0 ]] && chunk=0
+    local sc="${SEG_COLORS[$i]:-$CYN}"
+    if (( chunk > 0 )); then
+      # last char of each segment = slightly brighter head
+      local body=$(( chunk - 1 ))
+      [[ $body -gt 0 ]] && printf '%s%s%s' "$sc" "$(rep "$FILL_FULL" "$body")" "$R"
+      printf '%s%s%s' "$sc$BOLD" "$FILL_HEAD" "$R"
     fi
+    (( remaining -= chunk )) || true
+    (( col_i++ )) || true
   done
-  
-  printf '%s%s[%s%s%s]%s %s%3d%%%s  %s%s%s\n' \
-    "$(_P)" "$DGY" "$bar_filled" "$DGY" "$(rep "$PACMAN_CLEAN" "$empty")" "$R" \
-    "$B$WHT" "$pct" "$R" \
-    "$DIM" "$lbl" "$R"
+
+  # empty portion
+  if (( empty > 0 )); then
+    printf '%s%s%s' "$DGY" "$(rep "$FILL_EMPTY" "$empty")" "$R"
+  fi
+
+  # pct badge
+  printf '%s╣%s' "$DGY" "$R"
+  if (( pct == 100 )); then
+    printf '  %s%s %3d%%%s' "$EMERALD$BOLD" "✔" "$pct" "$R"
+  else
+    printf '  %s%s%3d%%%s' "$GOLD$BOLD" "" "$pct" "$R"
+  fi
+  echo
+
+  # ── Row 3: current step label ─────────────────────────────────
+  if [[ -n "$lbl" ]]; then
+    printf '%s  %s%s  %s%s%s\n' \
+      "$(_P)" "$DGY" "└─" "$ITALIC$GRY" "$lbl" "$R"
+  fi
+  echo
 }
 
+# ── task_progress: slim segmented bar per package ───────────────
 task_progress() {
-  local cur="$1" tot="$2" color="${3:-$CYN}"
+  local cur="$1" tot="$2" color="${3:-$C2}"
   local w; w=$(TW)
-  local bar_w=$(( w - PAD*2 - 4 ))
-  [[ $bar_w -lt 8 ]] && bar_w=8
+  local bar_w=$(( w - PAD*2 - 8 ))
+  [[ $bar_w -lt 12 ]] && bar_w=12
   local filled=$(( cur * bar_w / tot ))
   local empty=$(( bar_w - filled ))
-  
-  local pacman_frame="${PACMAN_FRAMES[$((SECONDS % 6))]}"
-  if [[ $cur -lt $tot ]]; then
-    printf '%s%s|%s%s%s%s%s|%s\n' \
-      "$(_P)" "$DGY" "$color" "$(rep '█' "$filled")" "$color$pacman_frame$R" \
-      "$DGY" "$(rep '░' "$empty")" "$R"
+
+  printf '%s  ' "$(_P)"
+  printf '%s▕%s' "$DGY" "$R"
+  if (( cur >= tot )); then
+    # complete: solid emerald
+    printf '%s%s%s' "$EMERALD$BOLD" "$(rep "$FILL_FULL" "$bar_w")" "$R"
+    printf '%s▏%s' "$DGY" "$R"
+    printf '  %s✔ done%s\n' "$EMERALD$BOLD" "$R"
+  elif (( filled > 0 )); then
+    local body=$(( filled - 1 ))
+    [[ $body -gt 0 ]] && printf '%s%s%s' "$color" "$(rep "$FILL_FULL" "$body")" "$R"
+    # animated glow head — uses SECONDS for flicker
+    local glow
+    (( SECONDS % 2 == 0 )) && glow="$GOLD$BOLD" || glow="$color$BOLD"
+    printf '%s%s%s' "$glow" "$FILL_HEAD" "$R"
+    printf '%s%s%s' "$DGY" "$(rep "$FILL_EMPTY" "$empty")" "$R"
+    printf '%s▏%s' "$DGY" "$R"
+    printf '  %s%d/%d%s\n' "$DGY" "$cur" "$tot" "$R"
   else
-    printf '%s%s|%s%s%s|%s\n' \
-      "$(_P)" "$DGY" "$GRN" "$(rep '█' "$bar_w")" "$R"
+    printf '%s%s%s' "$DGY" "$(rep "$FILL_EMPTY" "$bar_w")" "$R"
+    printf '%s▏%s' "$DGY" "$R"
+    printf '  %s%d/%d%s\n' "$DGY" "$cur" "$tot" "$R"
   fi
 }
 
@@ -401,24 +509,42 @@ ask() {
 
 # ── Headers ───────────────────────────────────────────────────────
 step_header() {
-  local num="$1" title="$2" color="${3:-$CYN}"
+  local num="$1" title="$2" color="${3:-$C1}"
   local w; w=$(TW)
+  local inner=$(( w - PAD*2 ))
   echo
-  printf '%s%s%s[ Step %s ]  %s%s%s\n' \
-    "$(_P)" "$color$B" "$B" "$num" "$WHT" "$title" "$R"
-  printf '%s%s%s%s\n' "$(_P)" "$color" "$(rep '-' $((w-PAD*2)))" "$R"
+  # top rule with step badge
+  local badge=" STEP ${num} "
+  local badge_len=${#badge}
+  local rule_len=$(( inner - badge_len - 2 ))
+  printf '%s%s%s %s%s%s %s%s%s\n' \
+    "$(_P)" "$DGY" "$(rep '─' 2)" \
+    "$color$BOLD" "$badge" "$R" \
+    "$DGY" "$(rep '─' $((rule_len > 0 ? rule_len : 2)))" "$R"
+  # title line
+  printf '%s  %s%s %s%s\n' \
+    "$(_P)" "$color$BOLD" "▸" "$WHT$BOLD" "$title$R"
+  printf '%s%s%s%s\n' "$(_P)" "$DGY" "$(rep '╌' "$inner")" "$R"
   echo
 }
 
 pkg_header() {
-  local name="$1" glyph="$2" color="${3:-$CYN}"
+  local name="$1" glyph="$2" color="${3:-$C2}"
   local w; w=$(TW)
-  local ll=$(( w - PAD*2 - ${#name} - ${#glyph} - 6 ))
-  [[ $ll -lt 2 ]] && ll=2
+  local inner=$(( w - PAD*2 ))
   echo
-  printf '%s%s%s+-- %s  %s  %s%s%s\n' \
-    "$(_P)" "$color$B" "$B" "$glyph" "$WHT" "$name" \
-    "$(rep '-' "$ll")" "$R"
+  # badge bar: ▐ PKG ▌ name ──────
+  local tag=" ${glyph} "
+  local tag_len=${#tag}
+  local name_len=${#name}
+  local tail=$(( inner - tag_len - name_len - 5 ))
+  [[ $tail -lt 2 ]] && tail=2
+  printf '%s%s%s%s%s%s  %s%s%s  %s%s%s\n' \
+    "$(_P)" \
+    "$color$BOLD" "▐${tag}▌" "$R" \
+    "  " "" \
+    "$WHT$BOLD" "$name" "$R" \
+    "$DGY" "$(rep '─' "$tail")" "$R"
   echo
 }
 
@@ -426,50 +552,39 @@ pkg_header() {
 #  DETECT ALREADY-INSTALLED VERSIONS
 # ================================================================
 detect_installed() {
-  # PHP
   local phpver=""
   if command -v php &>/dev/null; then
     phpver=$(php --version 2>/dev/null | head -1 | awk '{print $1,$2}')
   elif command -v php8.4 &>/dev/null; then
     phpver=$(php8.4 --version 2>/dev/null | head -1 | awk '{print $1,$2}')
   fi
-  if [[ -n "$phpver" ]]; then
-    ALREADY[php]="$phpver"
-  fi
+  [[ -n "$phpver" ]] && ALREADY[php]="$phpver"
 
-  # MariaDB / MySQL
   local dbver=""
   if command -v mariadb &>/dev/null; then
     dbver=$(mariadb --version 2>/dev/null | awk '{print $1,$2,$3}')
   elif command -v mysql &>/dev/null; then
     dbver=$(mysql --version 2>/dev/null | awk '{print $1,$2,$3}')
   fi
-  if [[ -n "$dbver" ]]; then
-    ALREADY[mariadb]="$dbver"
-  fi
+  [[ -n "$dbver" ]] && ALREADY[mariadb]="$dbver"
 
-  # Node.js
   local nodever=""
   if command -v node &>/dev/null; then
     nodever=$(node --version 2>/dev/null)
   fi
   if [[ -n "$nodever" ]]; then
     ALREADY[nodejs]="Node.js $nodever"
+    if command -v npm &>/dev/null; then
+      local npmver; npmver=$(npm --version 2>/dev/null)
+      ALREADY[nodejs]+=" / npm $npmver"
+    fi
   fi
 
-  # npm
-  if command -v npm &>/dev/null && [[ -n "${ALREADY[nodejs]:-}" ]]; then
-    local npmver; npmver=$(npm --version 2>/dev/null)
-    ALREADY[nodejs]+=" / npm $npmver"
-  fi
-
-  # Composer
   if command -v composer &>/dev/null; then
     local compver; compver=$(composer --version 2>/dev/null | head -1 | cut -d' ' -f1-3)
     ALREADY[composer]="$compver"
   fi
 
-  # Valet
   local valetbin
   valetbin=$(command -v valet 2>/dev/null \
     || echo "$HOME/.composer/vendor/bin/valet" \
@@ -479,7 +594,6 @@ detect_installed() {
     ALREADY[valet]="$vv"
   fi
 
-  # Laravel installer
   local laravelbin
   laravelbin=$(command -v laravel 2>/dev/null \
     || echo "$HOME/.composer/vendor/bin/laravel" \
@@ -505,9 +619,13 @@ show_banner() {
   center_color "${BLU}${B} | |_| | |_) | |_| | |\  | | | | |_| | ${R}" 38 "$w"
   center_color "${BLU}${B}  \___/|____/ \___/|_| \_| |_|  \___/  ${R}" 38 "$w"
   echo
-  center_plain "${B}Dev Stack Installer  v2.2${R}" "$w"
+  center_plain "${B}Dev Stack Installer  v2.3${R}" "$w"
   center_plain "PHP 8.4  |  MariaDB  |  Node.js  |  Composer  |  Valet  |  Laravel" "$w"
   echo
+  if [[ $IS_WSL -eq 1 ]]; then
+    center_plain "${YLW}WSL detected -- service commands adjusted${R}" "$w"
+    echo
+  fi
   center_plain "Ubuntu 24.04 LTS   |   $(date '+%Y-%m-%d  %H:%M')" "$w"
   echo
   printf '%s%s%s\n' "$DGY" "$(rep '=' "$w")" "$R"
@@ -515,12 +633,10 @@ show_banner() {
 }
 
 # ================================================================
-#  INITIAL SUDO PASSWORD PROMPT (UI)
+#  INITIAL SUDO PASSWORD PROMPT
 # ================================================================
 prompt_sudo_initial() {
-  if [[ $EUID -eq 0 ]]; then
-    return 0
-  fi
+  if [[ $EUID -eq 0 ]]; then return 0; fi
 
   cls
   local w; w=$(TW)
@@ -539,7 +655,7 @@ prompt_sudo_initial() {
   printf '\n'
 
   if printf '%s\n' "$__pw" | sudo -S -v >> "$LOG_FILE" 2>&1; then
-    CACHED_SUDO_PASS="$__pw"  # Cache password for later use
+    CACHED_SUDO_PASS="$__pw"
     local w2; w2=$(TW)
     echo
     printf '%s%s%s\n' "$DGY" "$(rep '=' "$w2")" "$R"
@@ -556,16 +672,15 @@ prompt_sudo_initial() {
 }
 
 # ================================================================
-#  STEP 1 — System Check + Already Installed detection
+#  STEP 1 — System Check
 # ================================================================
 check_requirements() {
   prompt_sudo_initial
-  
+
   show_banner
   step_header "1/6" "System Check" "$BLU"
   local w; w=$(TW)
 
-  # ── System status ───────────────────────────────────────────────
   box_top "$w" "$BLU"
 
   if [[ -f /etc/os-release ]]; then
@@ -578,6 +693,10 @@ check_requirements() {
     fi
   else
     box_row "$(ic_warn)  ${YLW}OS detection failed${R}" "$w" "$BLU"
+  fi
+
+  if [[ $IS_WSL -eq 1 ]]; then
+    box_row "$(ic_info)  ${CYN}WSL:${R}  ${YLW}Detected -- systemctl replaced with service${R}" "$w" "$BLU"
   fi
 
   if [[ $EUID -eq 0 ]]; then
@@ -612,7 +731,6 @@ check_requirements() {
   box_bot "$w" "$BLU"
   echo
 
-  # ── Detect already-installed versions ──────────────────────────
   spinner_start "Scanning installed packages"
   detect_installed
   spinner_stop
@@ -626,13 +744,7 @@ check_requirements() {
     local -a order=(php mariadb nodejs composer valet laravel)
     for key in "${order[@]}"; do
       if [[ -v "ALREADY[$key]" ]]; then
-        local row
-        row=$(printf '$(ic_exists)  %s%-18s%s %s%s%s' \
-          "${GRN}${B}" "$key" "$R" \
-          "${DIM}" "${ALREADY[$key]}" "$R")
-        # rebuild with actual ic_exists output
         box_row "$(ic_exists)  ${GRN}${B}$(printf '%-18s' "$key")${R}  ${DIM}${ALREADY[$key]}${R}" "$w" "$GRN"
-        # Mark as pre-installed in RESULT so summary shows it
         RESULT[$key]="${ALREADY[$key]}  ${DIM}(already installed)${R}"
       fi
     done
@@ -660,7 +772,7 @@ check_requirements() {
 }
 
 # ================================================================
-#  STEP 2 — Package Selection (all by default)
+#  STEP 2 — Package Selection
 # ================================================================
 show_package_selector() {
   step_header "2/6" "Install All Components" "$MGT"
@@ -688,9 +800,8 @@ select_packages() {
 #  STEP 3 — Configuration
 # ================================================================
 configure_options() {
-  # Disable exit-on-error for interactive prompts
   set +e
-  
+
   step_header "3/6" "Configuration" "$CYN"
   local w; w=$(TW)
 
@@ -709,21 +820,19 @@ configure_options() {
   fi
 
   local shells_found=""
-  if [[ -f "$HOME/.zshrc" ]]; then
-    shells_found+=".zshrc "
-  fi
-  if [[ -f "$HOME/.bashrc" ]]; then
-    shells_found+=".bashrc"
-  fi
+  [[ -f "$HOME/.zshrc"  ]] && shells_found+=".zshrc "
+  [[ -f "$HOME/.bashrc" ]] && shells_found+=".bashrc"
   [[ -z "$shells_found" ]] && shells_found="(none detected)"
 
   box_row "  $(ic_info)  Valet sites dir:  ${CYN}~/Sites${R}" "$w" "$CYN"
   box_row "  $(ic_info)  Shell configs:    ${DIM}${shells_found}${R}" "$w" "$CYN"
   box_row "  $(ic_info)  Log file:         ${DIM}${LOG_FILE}${R}" "$w" "$CYN"
+  if [[ $IS_WSL -eq 1 ]]; then
+    box_row "  $(ic_warn)  WSL mode:         ${YLW}service used instead of systemctl${R}" "$w" "$CYN"
+  fi
   box_bot "$w" "$CYN"
   echo
-  
-  # Re-enable exit-on-error
+
   set -e
 }
 
@@ -731,9 +840,8 @@ configure_options() {
 #  STEP 4 — Plan + Confirm
 # ================================================================
 show_plan() {
-  # Disable exit-on-error
   set +e
-  
+
   step_header "4/6" "Installation Plan" "$YLW"
   local w; w=$(TW)
 
@@ -754,9 +862,7 @@ show_plan() {
     box_row "  ${DGY}Skipped / already installed:${R}" "$w" "$YLW"
     for pkg in "${skipped[@]}"; do
       local ver_tag=""
-      if [[ -v "ALREADY[$pkg]" ]]; then
-        ver_tag="  ${DIM}${ALREADY[$pkg]}${R}"
-      fi
+      [[ -v "ALREADY[$pkg]" ]] && ver_tag="  ${DIM}${ALREADY[$pkg]}${R}"
       box_row "  ${DGY}~  ${pkg}${ver_tag}${R}" "$w" "$YLW"
     done
   fi
@@ -772,8 +878,7 @@ show_plan() {
 
   confirm "Start installation now?" \
     || { printf '\n%s %sAborted.%s\n\n' "$(_P)" "$YLW" "$R"; exit 0; }
-  
-  # Re-enable exit-on-error
+
   set -e
 }
 
@@ -787,26 +892,67 @@ do_update() {
   printf '%s%s%s[ System Update ]%s\n' "$(_P)" "$BLU$B" "" "$R"
   printf '%s%s%s%s\n' "$(_P)" "$DGY" "$(rep '-' $((w-PAD*2)))" "$R"
   echo
-  sudo_cmd "apt-get update"   apt-get update -qq
-  sudo_cmd "apt-get upgrade"  apt-get upgrade -y -qq
-  sudo_cmd "Base utilities"   apt-get install -y -qq \
-    curl wget gnupg2 software-properties-common \
-    apt-transport-https ca-certificates lsb-release
+
+  # Set non-interactive mode so apt never pauses for user input
+  # (grub prompts, service restart dialogs, config file questions, etc.)
+  export DEBIAN_FRONTEND=noninteractive
+  sudo_cmd "apt-get update" \
+    apt-get update -qq
+
+  sudo_cmd "apt-get upgrade" \
+    env DEBIAN_FRONTEND=noninteractive \
+      apt-get upgrade -y -qq \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold"
+
+  sudo_cmd "Base utilities" \
+    env DEBIAN_FRONTEND=noninteractive \
+      apt-get install -y -qq \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confold" \
+        curl wget gnupg2 software-properties-common \
+        apt-transport-https ca-certificates lsb-release
 }
 
 install_php() {
   [[ "${INSTALL[php]:-0}" != "1" ]] && return 0
   pkg_header "PHP 8.4" "*" "$MGT"
-  local t=0 total=3; task_progress $t $total "$MGT"
+  local t=0 total=4; task_progress $t $total "$MGT"
 
-  sudo_cmd "Add ondrej/php PPA"  add-apt-repository ppa:ondrej/php -y
+  sudo_cmd "Add ondrej/php PPA" \
+    env DEBIAN_FRONTEND=noninteractive add-apt-repository ppa:ondrej/php -y
   (( t++ )) || true; task_progress $t $total "$MGT"
 
-  sudo_cmd "apt-get update"      apt-get update -qq
-  sudo_cmd "PHP 8.4 + extensions" apt-get install -y -qq \
-    php8.4 php8.4-cli php8.4-common php8.4-curl php8.4-pgsql \
-    php8.4-fpm php8.4-gd php8.4-imap php8.4-intl php8.4-mbstring \
-    php8.4-mysql php8.4-opcache php8.4-soap php8.4-xml php8.4-zip
+  sudo_cmd "apt-get update" apt-get update -qq
+  sudo_cmd "PHP 8.4 + extensions" \
+    env DEBIAN_FRONTEND=noninteractive \
+    apt-get install -y -qq \
+      -o Dpkg::Options::="--force-confdef" \
+      -o Dpkg::Options::="--force-confold" \
+      php8.4 php8.4-cli php8.4-common php8.4-curl php8.4-pgsql \
+      php8.4-fpm php8.4-gd php8.4-imap php8.4-intl php8.4-mbstring \
+      php8.4-mysql php8.4-opcache php8.4-soap php8.4-xml php8.4-zip
+  (( t++ )) || true; task_progress $t $total "$MGT"
+
+  # ── FIX: ensure php8.4-fpm is running (critical for Valet) ──────
+  log_run "Starting php8.4-fpm service"
+  svc_start "php8.4-fpm"
+  svc_enable "php8.4-fpm"
+
+  # Verify FPM is actually running
+  if svc_status "php8.4-fpm" 2>/dev/null; then
+    log_ok "php8.4-fpm is running"
+  else
+    log_warn "php8.4-fpm may not be running -- trying again"
+    sudo service php8.4-fpm start >> "$LOG_FILE" 2>&1 || true
+    sleep 1
+    if sudo service php8.4-fpm status >> "$LOG_FILE" 2>&1; then
+      log_ok "php8.4-fpm started"
+    else
+      log_err "php8.4-fpm failed to start -- check $LOG_FILE"
+      INSTALL_ERRORS+=("php8.4-fpm start")
+    fi
+  fi
   (( t++ )) || true; task_progress $t $total "$MGT"
 
   local ver; ver=$(php8.4 --version 2>/dev/null | head -1 | awk '{print $1,$2}' || echo "PHP 8.4")
@@ -821,10 +967,16 @@ install_mariadb() {
   local t=0 total=2; task_progress $t $total "$BLU"
 
   sudo_cmd "mariadb-server + mariadb-client" \
-    apt-get install -y -qq mariadb-server mariadb-client
+    env DEBIAN_FRONTEND=noninteractive \
+    apt-get install -y -qq \
+      -o Dpkg::Options::="--force-confdef" \
+      -o Dpkg::Options::="--force-confold" \
+      mariadb-server mariadb-client
   (( t++ )) || true; task_progress $t $total "$BLU"
 
-  sudo_cmd "Enable + start MariaDB" systemctl enable --now mariadb
+  # ── FIX: use svc_enable for WSL compatibility ────────────────────
+  log_run "Enable + start MariaDB"
+  svc_enable "mariadb"
   (( t++ )) || true; task_progress $t $total "$BLU"
 
   local ver; ver=$(mariadbd --version 2>/dev/null | awk '{print $3}' || echo "MariaDB")
@@ -951,27 +1103,32 @@ install_nodejs() {
 install_valet() {
   [[ "${INSTALL[valet]:-0}" != "1" ]] && return 0
   pkg_header "Laravel Valet Linux" ">" "$RED"
-  local t=0 total=4; task_progress $t $total "$RED"
+  local t=0 total=5; task_progress $t $total "$RED"
 
   sudo_cmd "Valet deps" \
-    apt-get install -y -qq network-manager libnss3-tools jq xsel
+    env DEBIAN_FRONTEND=noninteractive \
+    apt-get install -y -qq \
+      -o Dpkg::Options::="--force-confdef" \
+      -o Dpkg::Options::="--force-confold" \
+      network-manager libnss3-tools jq xsel
   (( t++ )) || true; task_progress $t $total "$RED"
 
   run_cmd "composer global require cpriego/valet-linux" \
     composer global require cpriego/valet-linux
   (( t++ )) || true; task_progress $t $total "$RED"
 
-  # Find valet binary - check both possible global locations
+  # Find valet binary
   local cbin=""
   if [[ -x "$HOME/.config/composer/vendor/bin/valet" ]]; then
     cbin="$HOME/.config/composer/vendor/bin"
   elif [[ -x "$HOME/.composer/vendor/bin/valet" ]]; then
     cbin="$HOME/.composer/vendor/bin"
   fi
-  
+
   if [[ -z "$cbin" || ! -x "$cbin/valet" ]]; then
     log_err "Valet binary not found after installation"
     INSTALL_ERRORS+=("valet install")
+    (( t++ )) || true; task_progress $t $total "$RED"
     (( t++ )) || true; task_progress $t $total "$RED"
     (( t++ )) || true; task_progress $t $total "$RED"
     return 1
@@ -980,13 +1137,39 @@ install_valet() {
   [[ ":$PATH:" != *":$cbin:"* ]] && export PATH="$cbin:$PATH"
   log_dim "Valet binary: $cbin/valet"
 
-  # Run valet install (needs sudo for system config)
+  # ── FIX: Run valet install as current user (not root) ────────────
+  # This prevents ~/.valet files being created as root
   spinner_stop
-  # Use -E to preserve user environment (HOME, etc.)
-  sudo_cmd "valet install" sudo -E HOME="$HOME" "$cbin/valet" install
+  log_run "valet install (as $USER)"
+  local rc=0
+  # Use sudo only for the system-level parts; valet itself must run as user
+  # Pass --no-ansi to suppress color codes in log
+  "$cbin/valet" install >> "$LOG_FILE" 2>&1 || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    log_warn "valet install returned $rc -- attempting with sudo -E"
+    sudo -E HOME="$HOME" USER="$USER" "$cbin/valet" install >> "$LOG_FILE" 2>&1 || rc=$?
+  fi
+  if [[ $rc -eq 0 ]]; then
+    log_ok "valet install succeeded"
+  else
+    log_err "valet install failed (exit $rc) -- see $LOG_FILE"
+    INSTALL_ERRORS+=("valet install")
+  fi
   (( t++ )) || true; task_progress $t $total "$RED"
 
-  # Park ~/Sites (no sudo needed)
+  # ── FIX: Fix ownership of ~/.valet after install ─────────────────
+  log_run "Fix ~/.valet ownership"
+  sudo chown -R "$USER":"$USER" "$HOME/.valet" >> "$LOG_FILE" 2>&1 || true
+  sudo chmod -R u+rw "$HOME/.valet"            >> "$LOG_FILE" 2>&1 || true
+  log_ok "~/.valet permissions corrected"
+  (( t++ )) || true; task_progress $t $total "$RED"
+
+  # ── FIX: Ensure php8.4-fpm is running before valet park ──────────
+  log_run "Ensuring php8.4-fpm is running"
+  svc_start "php8.4-fpm" || true
+  sleep 1
+
+  # Park ~/Sites
   [[ ! -d "$HOME/Sites" ]] && { mkdir -p "$HOME/Sites"; log_ok "Created ~/Sites"; }
   if cd "$HOME/Sites" && "$cbin/valet" park >> "$LOG_FILE" 2>&1; then
     log_ok "Parked ~/Sites  ->  *.test"
@@ -994,7 +1177,6 @@ install_valet() {
     log_warn "valet park failed -- run: cd ~/Sites && valet park"
     INSTALL_ERRORS+=("valet park")
   fi
-  (( t++ )) || true; task_progress $t $total "$RED"
 
   log_ok "Valet ready -- access sites as <name>.test"
   RESULT[valet]="cpriego/valet-linux"
@@ -1049,6 +1231,55 @@ configure_shell() {
 }
 
 # ================================================================
+#  POST-INSTALL FIX — run after everything is done
+#  Corrects any permission issues left by sudo-run valet commands
+# ================================================================
+fix_valet_permissions() {
+  local w; w=$(TW)
+  echo
+  printf '%s%s%s[ Fixing Valet Permissions ]%s\n' "$(_P)" "$GRN$B" "" "$R"
+  printf '%s%s%s%s\n' "$(_P)" "$DGY" "$(rep '-' $((w-PAD*2)))" "$R"
+  echo
+
+  # Fix ownership of all valet-related directories
+  local dirs=("$HOME/.valet" "$HOME/.config/composer" "$HOME/.composer")
+  for dir in "${dirs[@]}"; do
+    if [[ -d "$dir" ]]; then
+      sudo chown -R "$USER":"$USER" "$dir" >> "$LOG_FILE" 2>&1 || true
+      sudo chmod -R u+rw "$dir"           >> "$LOG_FILE" 2>&1 || true
+      log_ok "Permissions fixed: $dir"
+    fi
+  done
+
+  # Ensure config.json is writable
+  if [[ -f "$HOME/.valet/config.json" ]]; then
+    sudo chown "$USER":"$USER" "$HOME/.valet/config.json" >> "$LOG_FILE" 2>&1 || true
+    chmod 644 "$HOME/.valet/config.json" >> "$LOG_FILE" 2>&1 || true
+    log_ok "config.json ownership corrected"
+  fi
+
+  # Restart php-fpm and nginx to ensure clean state
+  log_run "Restarting services"
+  svc_start "php8.4-fpm" || true
+  sleep 1
+
+  # Find valet binary and check status
+  local cbin=""
+  [[ -x "$HOME/.config/composer/vendor/bin/valet" ]] && cbin="$HOME/.config/composer/vendor/bin"
+  [[ -z "$cbin" && -x "$HOME/.composer/vendor/bin/valet" ]] && cbin="$HOME/.composer/vendor/bin"
+
+  if [[ -n "$cbin" ]]; then
+    [[ ":$PATH:" != *":$cbin:"* ]] && export PATH="$cbin:$PATH"
+    echo
+    log_info "Verifying valet status..."
+    "$cbin/valet" status >> "$LOG_FILE" 2>&1 \
+      && log_ok "valet status OK" \
+      || log_warn "valet status reported issues -- check: $LOG_FILE"
+  fi
+  echo
+}
+
+# ================================================================
 #  STEP 6 — Summary
 # ================================================================
 show_summary() {
@@ -1062,12 +1293,10 @@ show_summary() {
   local -a all_pkgs=(php mariadb nodejs composer valet laravel)
   for pkg in "${all_pkgs[@]}"; do
     if [[ -v "RESULT[$pkg]" ]]; then
-      # installed (new or pre-existing)
       printf '%s  %s%s+%s  %s%-16s%s  %s%s%s\n' \
         "$(_P)" "$GRN$B" "" "$R" "$B" "$pkg" "$R" \
         "$DIM" "${RESULT[$pkg]}" "$R"
     elif [[ "${INSTALL[$pkg]:-0}" == "0" && -v "ALREADY[$pkg]" ]]; then
-      # skipped because already installed
       printf '%s  %s~%s  %s%-16s%s  %s%s  [skipped -- already installed]%s\n' \
         "$(_P)" "$YLW$B" "$R" "$B" "$pkg" "$R" \
         "$DIM" "${ALREADY[$pkg]}" "$R"
@@ -1105,6 +1334,15 @@ show_summary() {
   box_row "  ${CYN}3.${R}  Visit in browser" "$w" "$CYN"
   box_row "     ${DIM}http://myapp.test${R}" "$w" "$CYN"
   box_sep "$w" "$CYN"
+
+  if [[ $IS_WSL -eq 1 ]]; then
+    box_row "  ${YLW}WSL note:${R}  Services don't auto-start on boot." "$w" "$CYN"
+    box_row "     ${DIM}Add to ~/.bashrc:  sudo service php8.4-fpm start${R}" "$w" "$CYN"
+    box_row "     ${DIM}                   sudo service nginx start${R}" "$w" "$CYN"
+    box_row "     ${DIM}                   sudo service mariadb start${R}" "$w" "$CYN"
+    box_sep "$w" "$CYN"
+  fi
+
   box_row "  ${CYN}4.${R}  Full log: ${DIM}${LOG_FILE}${R}" "$w" "$CYN"
   box_bot "$w" "$CYN"
   echo
@@ -1122,45 +1360,42 @@ main() {
   printf '[START] %s\n' "$(date)" > "$LOG_FILE"
 
   check_requirements
-  
-  # Flush input buffer before confirmation
+
   sleep 0.5
   while read -r -t 0.2 -n1 _discard 2>/dev/null; do :; done
-  
+
   echo
   confirm "Continue with installation?" \
     || { printf '\n%s %sCancelled.%s\n\n' "$(_P)" "$YLW" "$R"; exit 0; }
 
-  # Flush input buffer before package selection
   sleep 0.5
   while read -r -t 0.2 -n1 _discard 2>/dev/null; do :; done
-  
+
   select_packages
-  
-  # Flush input buffer before configuration
+
   sleep 0.5
   while read -r -t 0.2 -n1 _discard 2>/dev/null; do :; done
-  
+
   configure_options
-  
-  # Flush input buffer before plan review
+
   sleep 0.5
   while read -r -t 0.2 -n1 _discard 2>/dev/null; do :; done
-  
+
   show_plan
 
   show_banner
-  step_header "5/6" "Installing" "$GRN"
+  step_header "5/6" "Installing" "$EMERALD"
 
   local steps=("system" "php" "mariadb" "composer" "nodejs" "valet" "laravel")
   local n=${#steps[@]} cur=0
 
   for step in "${steps[@]}"; do
     (( cur++ )) || true
-    echo
-    printf '%s%sProgress  (%d/%d)%s\n' "$(_P)" "$DGY" "$cur" "$n" "$R"
+
+    # ── Live pipeline header ─────────────────────────────────────
+    local w; w=$(TW)
+    printf '%s%s%s%s\n' "$(_P)" "$DGY" "$(rep '─' $((w-PAD*2)))" "$R"
     global_progress "$cur" "$n" "$step"
-    echo
 
     case "$step" in
       system)   do_update        ;;
@@ -1173,9 +1408,13 @@ main() {
     esac
   done
 
-  echo
-  global_progress "$n" "$n" "complete"
-  echo
+  # ── Final completed bar ──────────────────────────────────────
+  local wf; wf=$(TW)
+  printf '%s%s%s%s\n' "$(_P)" "$DGY" "$(rep '─' $((wf-PAD*2)))" "$R"
+  global_progress "$n" "$n" "all packages installed"
+
+  # ── FIX: Always run permission fix after installation ────────────
+  fix_valet_permissions
 
   configure_shell
   show_summary
