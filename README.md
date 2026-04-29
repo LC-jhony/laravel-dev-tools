@@ -1,4 +1,4 @@
-# Dev Stack Installer for Ubuntu 24.04 LTS v3.0
+# Dev Stack Installer for Ubuntu 24.04 LTS v1.0
 
 Script de instalación automatizado y visual para configurar un entorno de desarrollo Laravel/PHP completo en Ubuntu 24.04 LTS y WSL.
 
