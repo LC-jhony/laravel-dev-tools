@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ════════════════════════════════════════════════════════════════
-#  Ubuntu Dev Stack Installer  v3.0
-#  PHP 8.4 · MariaDB · Node.js · Composer · Valet · Laravel
-#  Ubuntu 24.04 LTS  |  WSL compatible  |  bash 4.0+
+#  Ubuntu Dev Stack Installer  v3.2
+#  PHP 8.5 · MariaDB · Node.js · Composer · Valet · Laravel
+#  Ubuntu 26.04 LTS (Resolute Raccoon)  |  WSL compatible  |  bash 4.0+
 # ════════════════════════════════════════════════════════════════
 
 # ── Bash guard ───────────────────────────────────────────────────
@@ -25,16 +25,16 @@ export DEBIAN_FRONTEND=noninteractive
 # ── Palette ──────────────────────────────────────────────────────
 R=$'\033[0m'         ; BD=$'\033[1m'       ; DM=$'\033[2m'
 IT=$'\033[3m'
-K0=$'\033[38;5;255m' ; K1=$'\033[38;5;238m'; K2=$'\033[38;5;242m'
-K3=$'\033[38;5;246m' ; K4=$'\033[38;5;250m'; K5=$'\033[38;5;255m'
-CYAN=$'\033[38;5;51m'; TCYN=$'\033[38;5;45m'
-GRN=$'\033[38;5;84m' ; TGRN=$'\033[38;5;48m'
-YLW=$'\033[38;5;227m'; GOLD=$'\033[38;5;220m'
-RED=$'\033[38;5;203m'
+K0=$'\033[38;5;251m' ; K1=$'\033[38;5;240m'; K2=$'\033[38;5;241m'
+K3=$'\033[38;5;248m' ; K4=$'\033[38;5;252m'; K5=$'\033[38;5;251m'
+CYAN=$'\033[38;5;30m'; TCYN=$'\033[38;5;73m'
+GRN=$'\033[38;5;35m' ; TGRN=$'\033[38;5;113m'
+YLW=$'\033[38;5;216m'; GOLD=$'\033[38;5;217m'
+RED=$'\033[38;5;196m'
 
 # ── State ────────────────────────────────────────────────────────
 LOG_FILE="/tmp/dev-stack-$(date +%s).log"
-NODE_VERSION="22"
+NODE_VERSION="24"
 declare -A PKG_STATUS=()
 declare -A PKG_VER=()
 declare -A ALREADY=()
@@ -46,7 +46,7 @@ PKGS=(system php mariadb composer nodejs valet laravel)
 
 declare -A PKG_LABEL=(
   [system]="System Update"
-  [php]="PHP 8.4"
+  [php]="PHP 8.5"
   [mariadb]="MariaDB"
   [composer]="Composer"
   [nodejs]="Node.js"
@@ -76,8 +76,6 @@ rep() {
   printf '%s' "$s"
 }
 
-strip_ansi() { printf '%s' "$1" | sed 's/\x1b\[[0-9;]*[mK]//g'; }
-
 center() {
   local text="$1" vl="$2" w="${3:-$(TW)}"
   local pad=$(( (w - vl) / 2 ))
@@ -97,7 +95,7 @@ svc_start() {
 svc_enable() {
   local s="$1"
   if [ "$IS_WSL" -eq 1 ] || ! systemctl is-system-running --quiet 2>/dev/null; then
-    sudo service "$s" start        >> "$LOG_FILE" 2>&1 || true
+    sudo service "$s" start          >> "$LOG_FILE" 2>&1 || true
   else
     sudo systemctl enable --now "$s" >> "$LOG_FILE" 2>&1 || true
   fi
@@ -132,15 +130,15 @@ _st_icon() {
 }
 
 _st_label() {
-  local p="$1" st="${PKG_STATUS[$1]:-pending}" ver="${PKG_VER[$1]:-}"
+  local st="${PKG_STATUS[$1]:-pending}" ver="${PKG_VER[$1]:-}"
   case "$st" in
     ok)      [ -n "$ver" ] && printf '%s%s%s' "$TGRN" "$ver" "$R" \
-                           || printf '%s%s%s' "$TGRN" "installed" "$R" ;;
+                           || printf '%sinstalled%s' "$TGRN" "$R" ;;
     skip)    [ -n "$ver" ] && printf '%s%s  (skip)%s' "$K2" "$ver" "$R" \
                            || printf '%sskipped%s' "$K2" "$R" ;;
-    fail)    printf '%sfailed%s' "$RED" "$R" ;;
+    fail)    printf '%sfailed%s'       "$RED"  "$R" ;;
     running) printf '%sinstalling...%s' "$GOLD" "$R" ;;
-    *)       printf '%spending%s' "$K1" "$R" ;;
+    *)       printf '%spending%s'      "$K1"   "$R" ;;
   esac
 }
 
@@ -160,18 +158,16 @@ dash_draw_chrome() {
   cls; cur_hide
   dash_recalc_rows
 
-  # ── Title bar ──
   cur_pos 1 1
   printf '%s%s%s' "$K0" "$(rep '─' "$w")" "$R"
   cur_pos 2 1
   local wsl_tag=""
   [ "$IS_WSL" -eq 1 ] && wsl_tag="  ${DM}${K2}WSL${R}"
-  printf '  %s%sDev Stack Installer%s  %s%sv3.0%s%s' \
+  printf '  %s%sDev Stack Installer%s  %s%sv3.2%s%s' \
     "$BD$K5" "" "$R" "$DM$K2" "" "$R" "$wsl_tag"
   cur_pos 3 1
   printf '%s%s%s' "$K0" "$(rep '─' "$w")" "$R"
 
-  # ── Packages section ──
   cur_pos 5 1
   printf '  %s%sPACKAGES%s' "$DM$K2" "" "$R"
   cur_pos 6 1
@@ -186,19 +182,16 @@ dash_draw_chrome() {
     i=$(( i + 1 ))
   done
 
-  # ── Progress section ──
   cur_pos $(( DASH_PKG_ROW + ${#PKGS[@]} + 1 )) 1
   printf '%s%s%s' "$K0" "$(rep '─' "$w")" "$R"
   cur_pos $(( DASH_PKG_ROW + ${#PKGS[@]} + 2 )) 1
   printf '  %s%sPROGRESS%s' "$DM$K2" "" "$R"
 
-  # ── Log section ──
   cur_pos $(( DASH_LOG_ROW - 1 )) 1
   printf '%s%s%s' "$K0" "$(rep '─' "$w")" "$R"
   cur_pos $(( DASH_LOG_ROW )) 1
   printf '  %s%sLOG%s' "$DM$K2" "" "$R"
 
-  # ── Bottom ──
   cur_pos $(( DASH_LOG_ROW + LOG_LINES + 1 )) 1
   printf '%s%s%s' "$K0" "$(rep '─' "$w")" "$R"
   cur_pos $(( DASH_LOG_ROW + LOG_LINES + 2 )) 1
@@ -366,6 +359,9 @@ sudo_warmup() {
 _sudo() {
   local desc="$1"; shift
   log_run "$desc"
+  if [ $EUID -ne 0 ] && ! sudo -n true 2>/dev/null; then
+    sudo_warmup
+  fi
   spinner_start "$desc"
   local rc=0
   if sudo -n true 2>/dev/null; then
@@ -387,6 +383,34 @@ _run() {
   local rc=0
   "$@" >> "$LOG_FILE" 2>&1 || rc=$?
   spinner_stop
+  [ $rc -eq 0 ] && log_ok "$desc" || log_err "$desc (exit $rc)"
+  return $rc
+}
+
+# ══════════════════════════════════════════════════════════════════
+#  APT HELPERS
+# ══════════════════════════════════════════════════════════════════
+
+# apt_update_safe: runs apt-get update; on failure cleans partial lists and retries once
+apt_update_safe() {
+  local desc="${1:-apt-get update}"
+  log_run "$desc"
+  spinner_start "$desc"
+  local rc=0
+  sudo apt-get update -qq >> "$LOG_FILE" 2>&1 || rc=$?
+  spinner_stop
+
+  if [ $rc -ne 0 ]; then
+    log_warn "apt-get update failed (exit $rc) — cleaning lists and retrying..."
+    sudo rm -f /var/lib/apt/lists/partial/* 2>/dev/null || true
+    sudo rm -f /var/lib/apt/lists/lock      2>/dev/null || true
+    sudo rm -f /var/cache/apt/archives/lock 2>/dev/null || true
+    rc=0
+    spinner_start "$desc (retry)"
+    sudo apt-get update -qq >> "$LOG_FILE" 2>&1 || rc=$?
+    spinner_stop
+  fi
+
   [ $rc -eq 0 ] && log_ok "$desc" || log_err "$desc (exit $rc)"
   return $rc
 }
@@ -437,11 +461,11 @@ show_splash() {
   cur_pos $r 1;         printf '%s%s%s' "$K0" "$(rep '─' "$w")" "$R"
   cur_pos $(( r+2 )) 1; center "${BD}${K5}Dev Stack Installer${R}" 19 "$w"
   cur_pos $(( r+3 )) 1
-  local sub="v3.0  ·  Ubuntu 24.04"
+  local sub="v3.2  ·  Ubuntu 26.04 LTS"
   [ "$IS_WSL" -eq 1 ] && sub+="  ·  WSL"
   center "${DM}${K3}${sub}${R}" ${#sub} "$w"
   cur_pos $(( r+5 )) 1; center "${K1}$(rep '·' 48)${R}" 48 "$w"
-  cur_pos $(( r+6 )) 1; center "${K3}PHP 8.4  MariaDB  Node.js  Composer  Valet  Laravel${R}" 51 "$w"
+  cur_pos $(( r+6 )) 1; center "${K3}PHP 8.5  MariaDB  Node.js  Composer  Valet  Laravel${R}" 51 "$w"
   cur_pos $(( r+7 )) 1; center "${K1}$(rep '·' 48)${R}" 48 "$w"
   cur_pos $(( r+9 )) 1; center "${DM}${K2}$(date '+%Y-%m-%d  %H:%M')${R}" 16 "$w"
   cur_pos $(( r+11 )) 1; printf '%s%s%s' "$K0" "$(rep '─' "$w")" "$R"
@@ -458,23 +482,27 @@ show_splash() {
 detect_installed() {
   local p ver
   # PHP
-  for p in php php8.4; do
-    if ver=$(command -v "$p" &>/dev/null && "$p" --version 2>/dev/null | head -1 | awk '{print $2}' || true); then
+  for p in php php php8.4; do
+    if ver=$(command -v "$p" &>/dev/null && "$p" --version 2>/dev/null \
+             | head -1 | awk '{print $2}' || true); then
       [ -n "$ver" ] && { ALREADY[php]="$ver"; break; }
     fi
   done
   # MariaDB
   for p in mariadb mysql; do
-    if ver=$(command -v "$p" &>/dev/null && "$p" --version 2>/dev/null | awk '{print $3,$4}' | tr -d ',' || true); then
+    if ver=$(command -v "$p" &>/dev/null && "$p" --version 2>/dev/null \
+             | awk '{print $3,$4}' | tr -d ',' || true); then
       [ -n "$ver" ] && { ALREADY[mariadb]="$ver"; break; }
     fi
   done
   # Node.js
-  if ver=$(command -v node &>/dev/null && node --version 2>/dev/null | tr -d 'v' || true); then
+  if ver=$(command -v node &>/dev/null && node --version 2>/dev/null \
+           | tr -d 'v' || true); then
     [ -n "$ver" ] && ALREADY[nodejs]="$ver"
   fi
   # Composer
-  if ver=$(command -v composer &>/dev/null && composer --version 2>/dev/null | head -1 | awk '{print $3}' || true); then
+  if ver=$(command -v composer &>/dev/null && composer --version 2>/dev/null \
+           | head -1 | awk '{print $3}' || true); then
     [ -n "$ver" ] && ALREADY[composer]="$ver"
   fi
   # Valet
@@ -484,9 +512,9 @@ detect_installed() {
     "$HOME/.config/composer/vendor/bin/valet" \
     "$HOME/.composer/vendor/bin/valet"; do
     if [ -x "$bin" ]; then
-      ver=$("$bin" --version 2>/dev/null | head -1 | awk '{print $NF}' || echo "installed")
-      ALREADY[valet]="${ver:-installed}"
-      break
+      ver=$("$bin" --version 2>/dev/null | head -1 | awk '{print $NF}' \
+            || echo "installed")
+      ALREADY[valet]="${ver:-installed}"; break
     fi
   done
   # Laravel
@@ -495,9 +523,9 @@ detect_installed() {
     "$HOME/.config/composer/vendor/bin/laravel" \
     "$HOME/.composer/vendor/bin/laravel"; do
     if [ -x "$bin" ]; then
-      ver=$("$bin" --version 2>/dev/null | head -1 | awk '{print $NF}' || echo "installed")
-      ALREADY[laravel]="${ver:-installed}"
-      break
+      ver=$("$bin" --version 2>/dev/null | head -1 | awk '{print $NF}' \
+            || echo "installed")
+      ALREADY[laravel]="${ver:-installed}"; break
     fi
   done
   return 0
@@ -508,43 +536,76 @@ detect_installed() {
 # ══════════════════════════════════════════════════════════════════
 do_update() {
   pkg_running system "Updating apt cache..."
-  _sudo "apt-get update" apt-get update -qq                          || { pkg_fail system; return 1; }
+
+  # Fix any broken dpkg state before doing anything
+  _sudo "dpkg --configure -a" dpkg --configure -a || true
+  _sudo "apt-get install -f"  apt-get install -f -y -qq || true
+
+  apt_update_safe "apt-get update"                                   || { pkg_fail system; return 1; }
+
   dash_draw_msg "Upgrading system packages..."
   _sudo "apt-get upgrade" \
     env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq \
       -o Dpkg::Options::="--force-confdef" \
       -o Dpkg::Options::="--force-confold"                           || true
+
   dash_draw_msg "Installing base utilities..."
   _sudo "base utilities" \
     env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
       -o Dpkg::Options::="--force-confdef" \
       -o Dpkg::Options::="--force-confold" \
       curl wget gnupg2 software-properties-common \
-      apt-transport-https ca-certificates lsb-release git unzip      || { pkg_fail system; return 1; }
+      apt-transport-https ca-certificates lsb-release git unzip \
+      locales                                                            || { pkg_fail system; return 1; }
+
+  # Generate en_US.UTF-8 locale
+  _sudo "locale-gen en_US.UTF-8" locale-gen en_US.UTF-8 || true
+  _sudo "update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8" \
+    update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 || true
   pkg_ok system "ready"
 }
 
 # ══════════════════════════════════════════════════════════════════
-#  PHP 8.4
+#  PHP 8.5  — Ubuntu 26.04 official repos (no PPA needed)
 # ══════════════════════════════════════════════════════════════════
 do_php() {
-  pkg_running php "Adding ondrej/php PPA..."
-  _sudo "add ondrej/php PPA" \
-    env DEBIAN_FRONTEND=noninteractive add-apt-repository ppa:ondrej/php -y  || { pkg_fail php; return 1; }
-  _sudo "apt-get update" apt-get update -qq
-  dash_draw_msg "Installing PHP 8.4 + extensions..."
-  _sudo "php8.4 packages" \
+  pkg_running php "Installing PHP 8.5 from Ubuntu 26.04 repos..."
+
+  # Remove any stale ondrej PPA entries left from previous installs
+  # so they don't cause apt-get update failures
+  local stale
+  stale=$(grep -rlE 'ondrej|launchpadcontent' \
+    /etc/apt/sources.list.d/ 2>/dev/null || true)
+  if [ -n "$stale" ]; then
+    log_warn "Removing stale ondrej PPA entries..."
+    # shellcheck disable=SC2086
+    sudo rm -f $stale                              2>/dev/null || true
+    sudo rm -f /etc/apt/preferences.d/ondrej-php-pin 2>/dev/null || true
+    sudo rm -f /usr/share/keyrings/ondrej-php.gpg  2>/dev/null || true
+    sudo rm -f /var/lib/apt/lists/*ondrej*         2>/dev/null || true
+    sudo rm -f /var/lib/apt/lists/*launchpadcontent* 2>/dev/null || true
+    apt_update_safe "apt-get update (cleaning stale PPA)" || true
+  fi
+
+  # Install PHP 8.5 + extensions directly from Ubuntu 26.04 official repos
+  dash_draw_msg "Installing PHP 8.5 + extensions..."
+  _sudo "php packages" \
     env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
       -o Dpkg::Options::="--force-confdef" \
       -o Dpkg::Options::="--force-confold" \
-      php8.4 php8.4-cli php8.4-common php8.4-curl php8.4-pgsql \
-      php8.4-fpm php8.4-gd php8.4-imap php8.4-intl php8.4-mbstring \
-      php8.4-mysql php8.4-opcache php8.4-soap php8.4-xml php8.4-zip \
-      php8.4-bcmath php8.4-sqlite3                                   || { pkg_fail php; return 1; }
-  svc_start php8.4-fpm; svc_enable php8.4-fpm; sleep 1
-  svc_active php8.4-fpm 2>/dev/null && log_ok "php8.4-fpm running" || log_warn "php8.4-fpm may not be running"
-  sudo update-alternatives --set php /usr/bin/php8.4 >> "$LOG_FILE" 2>&1 || true
-  local ver; ver=$(php8.4 --version 2>/dev/null | head -1 | awk '{print $2}' || echo "8.4")
+      php php-cli php-common php-curl php-pgsql \
+      php-fpm php-gd php-intl php-mbstring \
+      php-mysql  php-soap php-xml php-zip \
+      php-bcmath php-sqlite3                                   || { pkg_fail php; return 1; }
+
+  svc_start php-fpm; svc_enable php-fpm; sleep 1
+  svc_active php-fpm 2>/dev/null \
+    && log_ok "php-fpm running" \
+    || log_warn "php-fpm may not be running"
+
+  sudo update-alternatives --set php /usr/bin/php >> "$LOG_FILE" 2>&1 || true
+  local ver; ver=$(php --version 2>/dev/null | head -1 | awk '{print $2}' \
+    || echo "8.5")
   pkg_ok php "$ver"
 }
 
@@ -595,7 +656,8 @@ _mariadb_secure() {
   local rc=0
   sudo mariadb -e "$sql" >> "$LOG_FILE" 2>&1 || rc=$?
   spinner_stop
-  [ $rc -eq 0 ] && log_ok "MariaDB hardened" || log_warn "Some security steps failed — see log"
+  [ $rc -eq 0 ] && log_ok "MariaDB hardened" \
+    || log_warn "Some security steps failed — see log"
 }
 
 # ══════════════════════════════════════════════════════════════════
@@ -606,13 +668,18 @@ do_composer() {
   local tmp; tmp=$(mktemp -d); cd "$tmp"
   spinner_start "Downloading composer-setup.php..."
   local rc=0
-  php -r "copy('https://getcomposer.org/installer','composer-setup.php');" >> "$LOG_FILE" 2>&1 || rc=$?
+  php -r "copy('https://getcomposer.org/installer','composer-setup.php');" \
+    >> "$LOG_FILE" 2>&1 || rc=$?
   spinner_stop
-  if [ $rc -ne 0 ]; then pkg_fail composer; cd - >/dev/null; rm -rf "$tmp"; return 1; fi
+  if [ $rc -ne 0 ]; then
+    pkg_fail composer; cd - >/dev/null; rm -rf "$tmp"; return 1
+  fi
   spinner_start "Running setup..."
   rc=0; php composer-setup.php >> "$LOG_FILE" 2>&1 || rc=$?
   spinner_stop
-  if [ $rc -ne 0 ]; then pkg_fail composer; cd - >/dev/null; rm -rf "$tmp"; return 1; fi
+  if [ $rc -ne 0 ]; then
+    pkg_fail composer; cd - >/dev/null; rm -rf "$tmp"; return 1
+  fi
   php -r "unlink('composer-setup.php');" 2>/dev/null || true
   _sudo "install composer binary" mv composer.phar /usr/local/bin/composer
   sudo chmod +x /usr/local/bin/composer 2>/dev/null || true
@@ -620,7 +687,8 @@ do_composer() {
   spinner_start "composer self-update..."
   composer self-update --no-interaction >> "$LOG_FILE" 2>&1 || true
   spinner_stop
-  local ver; ver=$(composer --version 2>/dev/null | head -1 | awk '{print $3}' || echo "2.x")
+  local ver; ver=$(composer --version 2>/dev/null | head -1 | awk '{print $3}' \
+    || echo "2.x")
   pkg_ok composer "$ver"
 }
 
@@ -637,7 +705,7 @@ do_nodejs() {
   # shellcheck disable=SC1091
   [ -s "$NVM_DIR/nvm.sh" ] && source "$NVM_DIR/nvm.sh" || true
   dash_draw_msg "Installing Node.js v${NODE_VERSION}..."
-  _run "nvm install $NODE_VERSION" nvm install "$NODE_VERSION"      || { pkg_fail nodejs; return 1; }
+  _run "nvm install $NODE_VERSION" nvm install "$NODE_VERSION"       || { pkg_fail nodejs; return 1; }
   _run "nvm alias default"         nvm alias default "$NODE_VERSION" || true
   local nv; nv=$(node -v 2>/dev/null | tr -d 'v' || echo "?")
   pkg_ok nodejs "$nv"
@@ -665,14 +733,11 @@ do_valet() {
       -o Dpkg::Options::="--force-confold" \
       network-manager libnss3-tools jq xsel                          || { pkg_fail valet; return 1; }
 
-  # Pre-refresh sudo token BEFORE composer require.
-  # cpriego/valet-linux calls sudo internally during install —
-  # the spinner background process would overwrite the password prompt.
-  sudo -v >> "$LOG_FILE" 2>&1 || true
   dash_draw_msg "composer global require cpriego/valet-linux..."
   log_run "composer require valet-linux"
   local rc=0
-  composer global require cpriego/valet-linux --no-interaction >> "$LOG_FILE" 2>&1 || rc=$?
+  composer global require cpriego/valet-linux --no-interaction \
+    >> "$LOG_FILE" 2>&1 || rc=$?
   [ $rc -eq 0 ] && log_ok "composer require valet-linux" \
     || { log_err "composer require valet-linux (exit $rc)"; pkg_fail valet; return 1; }
 
@@ -682,10 +747,8 @@ do_valet() {
     log_err "valet binary not found at $cbin/valet"
     pkg_fail valet; return 1
   fi
-  svc_start php8.4-fpm || true; sleep 1
+  svc_start php-fpm || true; sleep 1
 
-  # Refresh sudo token again before valet install (also needs sudo)
-  sudo -v >> "$LOG_FILE" 2>&1 || true
   dash_draw_msg "Running valet install..."
   rc=0
   spinner_start "valet install"
@@ -695,19 +758,23 @@ do_valet() {
     log_warn "Retrying valet install with sudo -E"
     rc=0
     spinner_start "valet install (retry)"
-    sudo -E HOME="$HOME" USER="$USER" "$cbin/valet" install >> "$LOG_FILE" 2>&1 || rc=$?
+    sudo -E HOME="$HOME" USER="$USER" "$cbin/valet" install \
+      >> "$LOG_FILE" 2>&1 || rc=$?
     spinner_stop
   fi
   [ $rc -ne 0 ] && { log_err "valet install failed (exit $rc)"; pkg_fail valet; return 1; }
+
   sudo chown -R "$USER":"$USER" "$HOME/.valet"           >> "$LOG_FILE" 2>&1 || true
   sudo chmod -R u+rw "$HOME/.valet"                      >> "$LOG_FILE" 2>&1 || true
   sudo chown -R "$USER":"$USER" "$HOME/.config/composer" >> "$LOG_FILE" 2>&1 || true
-  mkdir -p "$HOME/Sites"
-  cd "$HOME/Sites"
+
+  mkdir -p "$HOME/Sites"; cd "$HOME/Sites"
   "$cbin/valet" park >> "$LOG_FILE" 2>&1 && log_ok "~/Sites parked → *.test" \
     || log_warn "valet park failed — run: cd ~/Sites && valet park"
   cd - >/dev/null
-  local ver; ver=$("$cbin/valet" --version 2>/dev/null | head -1 | awk '{print $NF}' || echo "installed")
+
+  local ver; ver=$("$cbin/valet" --version 2>/dev/null | head -1 \
+    | awk '{print $NF}' || echo "installed")
   pkg_ok valet "$ver"
 }
 
@@ -719,10 +786,10 @@ do_laravel() {
   local cbin; cbin=$(_composer_bin)
   [[ ":$PATH:" != *":$cbin:"* ]] && export PATH="$cbin:$PATH"
 
-  # Remove stale
-  if composer global show laravel/installer &>/dev/null 2>&1 || false; then
+  if composer global show laravel/installer &>/dev/null 2>&1; then
     spinner_start "Removing old laravel/installer..."
-    composer global remove laravel/installer --no-interaction >> "$LOG_FILE" 2>&1 || true
+    composer global remove laravel/installer --no-interaction \
+      >> "$LOG_FILE" 2>&1 || true
     spinner_stop
   fi
 
@@ -730,7 +797,8 @@ do_laravel() {
   local rc=0
   dash_draw_msg "composer global require laravel/installer..."
   spinner_start "composer global require laravel/installer"
-  composer global require laravel/installer --no-interaction >> "$LOG_FILE" 2>&1 || rc=$?
+  composer global require laravel/installer --no-interaction \
+    >> "$LOG_FILE" 2>&1 || rc=$?
   spinner_stop
 
   # Attempt 2 — with-all-dependencies
@@ -756,12 +824,14 @@ do_laravel() {
 CJSON
     rc=0
     spinner_start "isolated composer install..."
-    composer install --no-interaction --working-dir="$idir" >> "$LOG_FILE" 2>&1 || rc=$?
+    composer install --no-interaction --working-dir="$idir" \
+      >> "$LOG_FILE" 2>&1 || rc=$?
     spinner_stop
     if [ $rc -eq 0 ]; then
       mkdir -p "$cbin"
       local src
-      for src in "$idir/vendor/bin/laravel" "$idir/vendor/laravel/installer/bin/laravel"; do
+      for src in "$idir/vendor/bin/laravel" \
+                 "$idir/vendor/laravel/installer/bin/laravel"; do
         [ -f "$src" ] && { cp "$src" "$cbin/laravel"; chmod +x "$cbin/laravel"; break; }
       done
     fi
@@ -771,8 +841,9 @@ CJSON
   if [ $rc -ne 0 ] || [ ! -x "$cbin/laravel" ]; then
     log_warn "Trying GitHub release download..."
     local url
-    url=$(curl -fsSL "https://api.github.com/repos/laravel/installer/releases/latest" 2>/dev/null \
-      | grep '"browser_download_url"' | grep '\.phar' | head -1 | cut -d'"' -f4 || true)
+    url=$(curl -fsSL "https://api.github.com/repos/laravel/installer/releases/latest" \
+      2>/dev/null | grep '"browser_download_url"' | grep '\.phar' \
+      | head -1 | cut -d'"' -f4 || true)
     if [ -n "$url" ]; then
       rc=0; mkdir -p "$cbin"
       spinner_start "Downloading laravel.phar..."
@@ -784,13 +855,13 @@ CJSON
     fi
   fi
 
-  # Verify
   local lbin=""
   lbin=$(command -v laravel 2>/dev/null || true)
   [ -z "$lbin" ] && [ -x "$cbin/laravel" ] && lbin="$cbin/laravel"
 
   if [ -n "$lbin" ] && [ -x "$lbin" ]; then
-    local ver; ver=$("$lbin" --version 2>/dev/null | head -1 | awk '{print $NF}' || echo "installed")
+    local ver; ver=$("$lbin" --version 2>/dev/null | head -1 \
+      | awk '{print $NF}' || echo "installed")
     pkg_ok laravel "$ver"
   else
     log_err "Could not install laravel/installer"
@@ -812,11 +883,13 @@ configure_shell() {
     [ -f "$f" ] || continue
     local fn; fn=$(basename "$f")
     if ! grep -q 'composer/vendor/bin' "$f" 2>/dev/null; then
-      { echo; echo "# Composer PATH — dev-stack-installer"; echo "export PATH=\"${cbin}:\$PATH\""; } >> "$f"
+      { echo; echo "# Composer PATH — dev-stack-installer"
+        echo "export PATH=\"${cbin}:\$PATH\""; } >> "$f"
       log_ok "Composer PATH → $fn"
     fi
     if ! grep -q 'NVM_DIR' "$f" 2>/dev/null; then
-      { echo; echo "# NVM — dev-stack-installer"; printf '%s\n' "$nvm_block"; } >> "$f"
+      { echo; echo "# NVM — dev-stack-installer"
+        printf '%s\n' "$nvm_block"; } >> "$f"
       log_ok "NVM config → $fn"
     fi
   done
@@ -832,7 +905,7 @@ post_fix() {
     sudo chown -R "$USER":"$USER" "$d" >> "$LOG_FILE" 2>&1 || true
     sudo chmod -R u+rw "$d"           >> "$LOG_FILE" 2>&1 || true
   done
-  svc_start php8.4-fpm || true; sleep 1
+  svc_start php-fpm || true; sleep 1
   local cbin; cbin=$(_composer_bin)
   [[ ":$PATH:" != *":$cbin:"* ]] && export PATH="$cbin:$PATH"
   if [ -x "$cbin/valet" ]; then
@@ -863,10 +936,10 @@ show_summary() {
     local st="${PKG_STATUS[$p]:-pending}" ver="${PKG_VER[$p]:-—}"
     local icon st_txt
     case "$st" in
-      ok)   icon="${TGRN}●${R}"; st_txt="${TGRN}installed${R}"  ;;
-      skip) icon="${K2}◌${R}";   st_txt="${K2}skipped${R}"      ;;
-      fail) icon="${RED}✘${R}";  st_txt="${RED}failed${R}"       ;;
-      *)    icon="${K1}○${R}";   st_txt="${K2}—${R}"             ;;
+      ok)   icon="${TGRN}●${R}"; st_txt="${TGRN}installed${R}" ;;
+      skip) icon="${K2}◌${R}";   st_txt="${K2}skipped${R}"     ;;
+      fail) icon="${RED}✘${R}";  st_txt="${RED}failed${R}"      ;;
+      *)    icon="${K1}○${R}";   st_txt="${K2}—${R}"            ;;
     esac
     cur_pos $row 1
     printf '  %s  %s%-20s%s  %-14s  %s\n' \
@@ -891,7 +964,7 @@ show_summary() {
   row=$(( row + 1 )); cur_pos $row 1
   printf '  %s%sNext steps%s\n' "$TCYN$BD" "" "$R"
   row=$(( row + 1 )); cur_pos $row 1
-  printf '  %s1.%s  source ~/.zshrc  %s# reload shell%s\n' "$TCYN" "$K4" "$K1$DM" "$R"
+  printf '  %s1.%s  source ~/.bashrc   %s# reload shell%s\n' "$TCYN" "$K4" "$K1$DM" "$R"
   row=$(( row + 1 )); cur_pos $row 1
   printf '  %s2.%s  cd ~/Sites && laravel new myapp\n' "$TCYN" "$K4"
   row=$(( row + 1 )); cur_pos $row 1
@@ -899,9 +972,11 @@ show_summary() {
 
   if [ "$IS_WSL" -eq 1 ]; then
     row=$(( row + 1 )); cur_pos $row 1
-    printf '  %s⚠  WSL:%s  add service start commands to ~/.bashrc\n' "$GOLD$BD" "$K3"
+    printf '  %s⚠  WSL:%s  add service start commands to ~/.bashrc\n' \
+      "$GOLD$BD" "$K3"
     row=$(( row + 1 )); cur_pos $row 1
-    printf '     %ssudo service php8.4-fpm start && sudo service nginx start && sudo service mariadb start%s\n' "$K2$DM" "$R"
+    printf '     %ssudo service php-fpm start && sudo service mariadb start%s\n' \
+      "$K2$DM" "$R"
   fi
 
   row=$(( row + 2 )); cur_pos $row 1
@@ -923,15 +998,12 @@ main() {
 
   show_splash
 
-  # Draw dashboard
   dash_recalc_rows
   dash_draw_chrome
 
-  # Init all as pending
   local p
   for p in "${PKGS[@]}"; do PKG_STATUS[$p]="pending"; done
 
-  # Scan existing
   dash_draw_msg "Scanning installed packages..."
   detect_installed
   for p in php mariadb nodejs composer valet laravel; do
@@ -939,10 +1011,8 @@ main() {
   done
   dash_draw_pkgs
 
-  # sudo auth
   sudo_warmup
 
-  # Skip already-installed?
   if [ ${#ALREADY[@]} -gt 0 ]; then
     log_info "Found existing: ${!ALREADY[*]}"
     if prompt_yn "Skip already-installed packages?" "y"; then
@@ -954,17 +1024,17 @@ main() {
     fi
   fi
 
-  # Node version
   if [ "${PKG_STATUS[nodejs]:-pending}" != "skip" ]; then
     prompt_val "Node.js version to install" "$NODE_VERSION" NODE_VERSION
   fi
 
-  # Confirm
   prompt_yn "Start installation now?" "y" || {
-    cur_pos "$(_prompt_row)" 1; printf '  %sCancelled.%s\n' "$GOLD" "$R"; cur_show; exit 0
+    cur_pos "$(_prompt_row)" 1
+    printf '  %sCancelled.%s\n' "$GOLD" "$R"
+    cur_show; exit 0
   }
 
-  # ── Install loop ─────────────────────────────────────────────────
+  # ── Install loop ──────────────────────────────────────────────
   local total=${#PKGS[@]} done_n=0
   for p in "${PKGS[@]}"; do
     dash_draw_bar "$done_n" "$total"
